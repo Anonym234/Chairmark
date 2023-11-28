@@ -15,6 +15,8 @@
 //!
 //! ## example without using macros
 //! ```rust
+//! use chairmark::{chair, Time, Comparison};
+//!
 //! // checks if number is power of two
 //! fn is_power(arg: u32) -> bool {
 //!     arg.to_ne_bytes().into_iter().sum::<u8>() == 1
@@ -38,6 +40,8 @@
 //!
 //! ## example with all macros
 //! ```rust
+//! use chairmark::*;
+//!
 //! // checks if number is power of two
 //! fn is_power(arg: u32) -> bool {
 //!     arg.to_ne_bytes().into_iter().sum::<u8>() == 1
@@ -61,6 +65,8 @@
 //!
 //! # example with prepared data
 //! ```rust
+//! use chairmark::*;
+//!
 //! // custom sort function
 //! fn bubblesort(data: &mut Vec<u32>) {
 //!     /* your great bubblesort implementation */
@@ -82,10 +88,14 @@
 //! }
 //! ```
 
+use mdtable::{Builder, Table};
 use std::{
     fmt::Display,
     time::{Duration, Instant},
 };
+
+mod histogram;
+use histogram::Histogram;
 
 /// aggregates to an [`Aggregate`] of [`Time`]
 #[macro_export]
@@ -112,105 +122,6 @@ macro_rules! agg_and_cmp {
         Comparison::from([ $(( stringify!($x), agg!($x) )),* ])
     };
 }
-
-mod multiset;
-use multiset::MultiSet;
-
-mod table {
-    pub struct Table<N: AsRef<str>, T: AsRef<str>, const WIDTH: usize> {
-        header: Option<Row<N, N, WIDTH>>,
-        alignment: Alignments<WIDTH>,
-        rows: Vec<Row<N, T, WIDTH>>,
-    }
-
-    struct Row<N: AsRef<str>, T: AsRef<str>, const WIDTH: usize> {
-        header: N,
-        data: [T; WIDTH],
-    }
-
-    impl<N: AsRef<str>, T: AsRef<str>, const WIDTH: usize> From<(N, [T; WIDTH])> for Row<N, T, WIDTH> {
-        fn from(value: (N, [T; WIDTH])) -> Self {
-            let (header, data) = value;
-            Self { header, data }
-        }
-    }
-
-    impl<N, const INIT: usize, const WIDTH: usize> From<[N; INIT]> for Row<N, N, WIDTH>
-    where
-        N: AsRef<str>,
-    {
-        fn from(value: [N; INIT]) -> Self {
-            assert_eq!(WIDTH + 1, INIT);
-
-            value.chunks()
-            
-            Self {
-                header: 
-            }
-        }
-    }
-
-    enum Alignment {
-        Left,
-        Right,
-        Center,
-    }
-
-    struct Alignments<const WIDTH: usize> {
-        header: Alignment,
-        data: [Alignment; WIDTH],
-    }
-
-    impl<const WIDTH: usize> Default for Alignments<WIDTH> {
-        fn default() -> Self {
-            Self {
-                header: Alignment::Left,
-                data: [Alignment::Right; WIDTH],
-            }
-        }
-    }
-
-    pub struct Builder<N: AsRef<str>, T: AsRef<str>, const WIDTH: usize> {
-        header: Option<Row<N, T, WIDTH>>,
-        alignment: Option<Alignments<WIDTH>>,
-        rows: Vec<Row<N, T, WIDTH>>,
-    }
-
-    impl<N: AsRef<str>, T: AsRef<str>, const WIDTH: usize> Builder<N, T, WIDTH> {
-        pub fn new() -> Self {
-            Self {
-                header: None,
-                alignment: None,
-                rows: Vec::new(),
-            }
-        }
-
-        pub fn header(&mut self, header: impl Into<Row<N, N, WIDTH>>) {
-            assert!(self.header.is_none());
-
-            self.header = Some(header.into());
-        }
-
-        pub fn alignment(&mut self, alignment: impl Into<Alignments<WIDTH>>) {
-            assert!(self.alignment.is_none());
-
-            self.alignment = Some(alignment.into());
-        }
-
-        pub fn add_row(&mut self, row: impl Into<Row<N, T, WIDTH>>) {
-            self.rows.push(row.into());
-        }
-
-        pub fn make(self) -> Table<N, T, WIDTH> {
-            Table {
-                header: self.header,
-                alignment: self.alignment.unwrap_or_default(),
-                rows: self.rows,
-            }
-        }
-    }
-}
-use table::Table;
 
 /// timer type to time anything
 ///
@@ -248,25 +159,30 @@ impl Timer {
 /// this structure stores all inserted points and is intended to be used for multiple runs of benchmarks
 ///
 /// it provides facilities to aggregate the given data, see `[Self::aggregate]`
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Measurements {
-    durations: MultiSet<Duration>,
+    durations: Vec<Duration>,
+    is_sorted: bool,
 }
 
 impl Measurements {
     /// new, empty measurements
     fn new() -> Self {
-        Self::default()
+        Self {
+            durations: Vec::new(),
+            is_sorted: true,
+        }
     }
 
     /// accept a new data point (duration)
     fn accept(&mut self, duration: Duration) {
-        self.durations.insert(duration);
+        self.durations.push(duration);
+        self.is_sorted = false;
     }
 
     /// get number of datapoints stored
-    pub fn size(&self) -> usize {
-        self.durations.size()
+    pub fn len(&self) -> usize {
+        self.durations.len()
     }
 
     /// checks whether no datapoints are stored
@@ -277,17 +193,19 @@ impl Measurements {
     /// shortest duration of collected data
     ///
     /// # panic
-    /// panis if `self.is_empty()`
+    /// panis if `self.is_empty()` or `!self.is_sorted`
     pub fn min(&self) -> Duration {
-        *self.durations.min().unwrap()
+        assert!(self.is_sorted);
+        self.durations[0]
     }
 
     /// longest duration of collected data
     ///
     /// # panic
-    /// panis if `self.is_empty()`
+    /// panis if `self.is_empty()` or `!self.is_sorted`
     pub fn max(&self) -> Duration {
-        *self.durations.max().unwrap()
+        assert!(self.is_sorted);
+        self.durations[self.len() - 1]
     }
 
     /// mean duration of collected data (arithmetic mean)
@@ -295,7 +213,8 @@ impl Measurements {
     /// # panic
     /// panis if `self.is_empty()`
     pub fn arith_mean(&self) -> Duration {
-        self.durations.iter().reduce(|l, r| l + r).unwrap() / self.size() as u32
+        let sum: Duration = self.durations.iter().sum();
+        sum / self.len() as u32
     }
 
     /// median duration of collected data
@@ -303,24 +222,10 @@ impl Measurements {
     /// **NOTE**: right-biased in an even length data collection
     ///
     /// # panic
-    /// panis if `self.is_empty()`
+    /// panis if `self.is_empty()` or `!self.is_sorted`
     pub fn median(&self) -> Duration {
-        self.durations.iter().take(self.size() / 2).last().unwrap()
-    }
-
-    /// mode duration of collected data (the most often occured duration)
-    ///
-    /// **NOTE**: this might yield unreliable results
-    ///
-    /// # panic
-    /// panis if `self.is_empty()`
-    pub fn mode(&self) -> Duration {
-        *self
-            .durations
-            .iter_counts()
-            .reduce(|l @ (_, lc), r @ (_, rc)| if rc > lc { r } else { l })
-            .unwrap()
-            .0
+        assert!(self.is_sorted);
+        *self.durations.iter().take(self.len() / 2).last().unwrap()
     }
 
     /// variance in duration of collected data
@@ -336,10 +241,18 @@ impl Measurements {
         }))
     }
 
+    /// sorts the duration data
+    ///
+    /// is required before some aggregation steps
+    pub fn sort(&mut self) {
+        self.durations.sort_unstable();
+        self.is_sorted = true;
+    }
+
     /// aggregate all other information into one struct
     ///
     /// # panics
-    /// since it uses the other aggregate functions, if the collection is empty, a `panic!` is invoked
+    /// since it uses the other aggregate functions, if the collection is empty or it's not sorted, a `panic!` is invoked
     pub fn aggregate<T>(&self) -> Aggregate<T>
     where
         Duration: Into<T>,
@@ -349,27 +262,12 @@ impl Measurements {
             max: self.max().into(),
             arith_mean: self.arith_mean().into(),
             median: self.median().into(),
-            mode: self.mode().into(),
             variance: self.variance().into(),
         }
     }
-}
 
-impl<'a> IntoIterator for &'a Measurements {
-    type Item = Duration;
-    type IntoIter = <&'a MultiSet<Duration> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        (&self.durations).into_iter()
-    }
-}
-
-impl IntoIterator for Measurements {
-    type Item = Duration;
-    type IntoIter = <MultiSet<Duration> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.durations.into_iter()
+    pub fn histogram<const N: usize>(&self) -> Histogram<N> {
+        Histogram::make_with(&self.durations[..])
     }
 }
 
@@ -382,18 +280,16 @@ pub struct Aggregate<T> {
     max: T,
     arith_mean: T,
     median: T,
-    mode: T,
     variance: T,
 }
 
 impl<T> Aggregate<T> {
     /// getter functions and names for all stored data
-    const GET_DATA: [(&'static str, fn(&Self) -> &T); 6] = [
+    const GET_DATA: [(&'static str, fn(&Self) -> &T); 5] = [
         ("min", Self::min),
         ("max", Self::max),
         ("arith_mean", Self::arith_mean),
         ("median", Self::median),
-        ("mode", Self::mode),
         ("variance", Self::variance),
     ];
 
@@ -417,11 +313,6 @@ impl<T> Aggregate<T> {
         &self.median
     }
 
-    /// get mode
-    pub fn mode(&self) -> &T {
-        &self.mode
-    }
-
     /// get variance
     pub fn variance(&self) -> &T {
         &self.variance
@@ -430,15 +321,8 @@ impl<T> Aggregate<T> {
     /// get all data with names
     ///
     /// returns an array with tuples (name, value)
-    pub fn all(&self) -> [(&'static str, &T); 6] {
-        [
-            ("min", self.min()),
-            ("max", self.max()),
-            ("arith_mean", self.arith_mean()),
-            ("median", self.median()),
-            ("mode", self.mode()),
-            ("variance", self.variance()),
-        ]
+    pub fn all(&self) -> [(&'static str, &T); 5] {
+        Self::GET_DATA.map(|(name, getter)| (name, getter(self)))
     }
 }
 
@@ -450,7 +334,6 @@ impl From<Aggregate<Duration>> for Aggregate<Time> {
             max: value.max.into(),
             arith_mean: value.arith_mean.into(),
             median: value.median.into(),
-            mode: value.mode.into(),
             variance: value.variance.into(),
         }
     }
@@ -693,8 +576,46 @@ where
     A: AsRef<str>,
     for<'a> &'a T: Into<Time>,
 {
-    fn table(&self) -> Table {
-        todo!();
+    /// generate a table for the comparison
+    pub fn table<'x>(&'x self) -> Table<&'static str, &'x str, String, N> {
+        let mut builder = Builder::new();
+
+        builder.header(("", {
+            let mut refs = [""; N];
+            for i in 0..N {
+                refs[i] = self.0[i].0.as_ref();
+            }
+            refs
+        }));
+
+        builder.default_alignments();
+
+        for (name, getter) in Aggregate::GET_DATA {
+            let mut content = Vec::with_capacity(N);
+
+            let mut baseline: Option<Time> = None;
+            for (_, agg) in &self.0 {
+                let duration = getter(agg);
+                let time: Time = duration.into();
+
+                if let Some(baseline) = baseline {
+                    let diff_percent = {
+                        let mut diff = time.total_nanos_f64() / baseline.total_nanos_f64();
+                        diff -= 1.0;
+                        diff *= 100.0; // make percent
+                        diff.trunc()
+                    };
+                    content.push(format!("{} ({:>3}%)", time, diff_percent));
+                } else {
+                    content.push(time.to_string());
+                    baseline = Some(time);
+                }
+            }
+
+            builder.row((name, content.try_into().ok().unwrap()));
+        }
+
+        builder.finish()
     }
 }
 
@@ -705,6 +626,8 @@ where
 ///
 /// # Example
 /// ```rust
+/// use chairmark::{chair, Time};
+///
 /// fn to_chairmark() {
 ///     /* some lengthy function */
 /// }
@@ -726,11 +649,14 @@ pub fn chair<Return>(runs: usize, f: impl Fn() -> Return) -> Measurements {
 ///
 /// # Example
 /// ```rust
+/// use chairmark::{chair_prepare, Time};
+///
 /// fn prepare(run_id: usize) -> Vec<u32> {
 ///     (0..run_id as u32).collect()
 /// }
+///
 /// fn main() {
-///     let agg = chair_prepare(1_000, prepare, |data| data.sort()).aggregate::<Time>();
+///     let agg = chair_prepare(1_000, prepare, |mut data| data.sort()).aggregate::<Time>();
 ///     println!("{}", agg);
 /// }
 /// ```
@@ -746,5 +672,40 @@ pub fn chair_prepare<Data, Return>(
         measurements.accept(Timer::time(move || f(data)));
     }
 
+    measurements.sort();
     measurements
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table() {
+        fn bubblesort(data: &mut Vec<u32>) {
+            let len = data.len();
+            let mut sorted = false;
+            while !sorted {
+                sorted = true;
+                for i in 1..len {
+                    let j = i - 1;
+                    if data[j] < data[i] {
+                        data.swap(i, j);
+                        sorted = false;
+                    }
+                }
+            }
+        }
+
+        const RUNS: usize = 1_000;
+        let prepare = |_| (0u32..100).collect();
+        let bubblesort = chair_prepare(RUNS, prepare, |mut data| bubblesort(&mut data));
+        println!("bubblesort:\n{}", bubblesort.histogram::<50>());
+
+        let std = chair_prepare(RUNS, prepare, |mut data| data.sort());
+        println!("std:\n{}", std.histogram::<10>());
+
+        let compare = agg_and_cmp![std, bubblesort];
+        println!("{}", compare.table());
+    }
 }
